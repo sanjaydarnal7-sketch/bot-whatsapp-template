@@ -1,33 +1,26 @@
 /**
- * WhatsApp Bot Entry Point
- * Craftsmen & Co. - Auto-Clean Session & Pairing Code Support
+ * Craftsmen & Co. - Final Production WhatsApp Engine
  */
 const express = require("express");
 const {
   default: makeWASocket,
   useMultiFileAuthState,
   fetchLatestBaileysVersion,
+  DisconnectReason,
 } = require("@whiskeysockets/baileys");
 const fs = require("fs");
 const path = require("path");
 const pino = require("pino");
-const { createLogger, withRetry, ...config } = require("./utils");
 
-// Web Server for Render Port Binding
+// 1. Express Port Binding for Render
 const app = express();
 const PORT = process.env.PORT || 10000;
 
-app.get("/", (req, res) => {
-  res.send("Craftsmen & Co. WhatsApp Bot Active");
-});
+app.get("/", (req, res) => res.send("Craftsmen & Co. Bot is Active & Running 24/7"));
+app.listen(PORT, () => console.log(`[HTTP] Server bound successfully on port ${PORT}`));
 
-app.listen(PORT, () => {
-  console.log(`Port bound successfully to ${PORT}`);
-});
-
-// Logging
-const baseLogger = pino({ level: "info" });
-const logger = createLogger(baseLogger);
+// 2. Logger & Event Handlers Loader
+const logger = pino({ level: "info" });
 
 const commands = new Map();
 if (fs.existsSync("./commands")) {
@@ -48,14 +41,16 @@ for (const file of eventFiles) {
   }
 }
 
+// Global reference to avoid duplicate socket loops
+let sock = null;
+
 async function startBot() {
   try {
     const authPath = path.join(__dirname, "auth_info");
-
     const { state, saveCreds } = await useMultiFileAuthState(authPath);
     const { version } = await fetchLatestBaileysVersion();
 
-    const sock = makeWASocket({
+    sock = makeWASocket({
       version,
       auth: state,
       printQRInTerminal: false,
@@ -67,52 +62,65 @@ async function startBot() {
       shouldSyncHistoryMessage: false,
     });
 
-    // Handle logout error code 401 automatically by clearing folder
-    sock.ev.on("connection.update", async (update) => {
-      const { connection, lastDisconnect } = update;
-      if (connection === "close") {
-        const statusCode = lastDisconnect?.error?.output?.statusCode;
-        if (statusCode === 401) {
-          console.log("Logged out by WhatsApp! Auto-clearing session...");
-          if (fs.existsSync(authPath)) {
-            fs.rmSync(authPath, { recursive: true, force: true });
-          }
-          startBot();
-          return;
-        }
-      }
-    });
-
-    if (!sock.authState.creds.registered) {
-      const targetNumber = process.env.BOT_PHONE_NUMBER || "918766540537";
-      const cleanNumber = targetNumber.replace(/[^0-9]/g, "");
-
-      setTimeout(async () => {
-        try {
-          let pairingCode = await sock.requestPairingCode(cleanNumber);
-          pairingCode = pairingCode?.match(/.{1,4}/g)?.join("-") || pairingCode;
-          console.log("\n==================================================");
-          console.log(`  YOUR FRESH PAIRING CODE: ${pairingCode}`);
-          console.log("==================================================\n");
-        } catch (err) {
-          logger.error("Error generating pairing code", { error: err.message });
-        }
-      }, 5000);
-    }
-
     sock.ev.on("creds.update", saveCreds);
 
+    // Dynamic Event Registration
     for (const { eventName, handler } of eventHandlers) {
       if (eventName === "connection.update") {
-        sock.ev.on(eventName, handler(sock, logger, saveCreds, startBot));
+        sock.ev.on("connection.update", async (update) => {
+          const { connection, lastDisconnect } = update;
+
+          if (connection === "open") {
+            console.log("\n==========================================");
+            console.log("   SUCCESSFULLY CONNECTED TO WHATSAPP!");
+            console.log("==========================================\n");
+          }
+
+          if (connection === "close") {
+            const statusCode = lastDisconnect?.error?.output?.statusCode;
+            console.log(`[Connection Closed] Status Code: ${statusCode}`);
+
+            if (statusCode === DisconnectReason.loggedOut || statusCode === 401) {
+              console.log("Session invalid or logged out. Resetting auth directory...");
+              if (fs.existsSync(authPath)) {
+                fs.rmSync(authPath, { recursive: true, force: true });
+              }
+            }
+            // Re-initialize cleanly after delay
+            setTimeout(startBot, 5000);
+          }
+
+          // Pass to original handler
+          handler(sock, logger, saveCreds, startBot)(update);
+        });
       } else if (eventName === "messages.upsert") {
         sock.ev.on(eventName, handler(sock, logger, commands));
       } else {
         sock.ev.on(eventName, handler(sock, logger));
       }
     }
+
+    // Pairing Code Generator
+    if (!sock.authState.creds.registered) {
+      const targetNumber = process.env.BOT_PHONE_NUMBER || "918766540537";
+      const cleanNumber = targetNumber.replace(/[^0-9]/g, "");
+
+      setTimeout(async () => {
+        try {
+          if (!sock.authState.creds.registered) {
+            let pairingCode = await sock.requestPairingCode(cleanNumber);
+            pairingCode = pairingCode?.match(/.{1,4}/g)?.join("-") || pairingCode;
+            console.log("\n==================================================");
+            console.log(`  YOUR PAIRING CODE FOR WHATSAPP: ${pairingCode}`);
+            console.log("==================================================\n");
+          }
+        } catch (err) {
+          logger.error("Pairing code error", { error: err.message });
+        }
+      }, 7000);
+    }
   } catch (error) {
-    logger.error("Failed to start bot", { error: error.message });
+    logger.error("Failed to start bot engine", { error: error.message });
     setTimeout(startBot, 5000);
   }
 }

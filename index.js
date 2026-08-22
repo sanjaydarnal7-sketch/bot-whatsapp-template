@@ -10,20 +10,7 @@ const {
 const fs = require("fs");
 const path = require("path");
 const pino = require("pino");
-const express = require("express"); // Added for Render port binding
 const { createLogger, withRetry, ...config } = require("./utils");
-
-// Render Port Binding Server
-const app = express();
-const PORT = process.env.PORT || 10000;
-
-app.get("/", (req, res) => {
-  res.send("WhatsApp Community AI Bot is running live!");
-});
-
-app.listen(PORT, () => {
-  console.log(`Server listening on port ${PORT}`);
-});
 
 // Logging via pino
 const baseLogger = pino({
@@ -89,23 +76,6 @@ async function startBot() {
     // Save login credentials on update
     sock.ev.on("creds.update", saveCreds);
 
-    // Filter to ensure bot only responds in Community Groups
-    sock.ev.on("messages.upsert", async (m) => {
-      if (m.type === "notify") {
-        for (const msg of m.messages) {
-          // Ignore own messages or status updates
-          if (msg.key.fromMe || msg.key.remoteJid === "status@broadcast") continue;
-
-          // Check if message is from a group (community / group JID ends with @g.us)
-          const isGroup = msg.key.remoteJid.endsWith("@g.us");
-          if (!isGroup) {
-            // Personal DMs ko ignore kar dega
-            continue;
-          }
-        }
-      }
-    });
-
     // Register all event handlers
     for (const { eventName, handler } of eventHandlers) {
       if (eventName === "connection.update") {
@@ -117,10 +87,7 @@ async function startBot() {
       }
     }
   } catch (error) {
-    logger.error("Failed to start bot", {
-      error: error.message,
-      stack: error.stack,
-    });
+    logger.error("Failed to start bot", { error: error.message, stack: error.stack });
     setTimeout(startBot, 5000);
   }
 }

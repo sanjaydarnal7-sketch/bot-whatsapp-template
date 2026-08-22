@@ -1,6 +1,6 @@
 /**
  * WhatsApp Bot Entry Point
- * Loads config, commands, events, and starts the bot.
+ * Craftsmen & Co. - Baileys Bot with Pairing Code Support
  */
 const {
   default: makeWASocket,
@@ -21,7 +21,6 @@ const logger = createLogger(baseLogger);
 
 /**
  * Loads all command modules from the commands directory.
- * @returns {Map}
  */
 const commands = new Map();
 if (fs.existsSync("./commands")) {
@@ -33,7 +32,6 @@ if (fs.existsSync("./commands")) {
 
 /**
  * Loads all event handler modules from the events directory.
- * @returns {Array}
  */
 const eventFiles = fs.existsSync("./events")
   ? fs.readdirSync("./events").filter((f) => f.endsWith(".js"))
@@ -64,14 +62,33 @@ async function startBot() {
     const sock = makeWASocket({
       version,
       auth: state,
-      printQRInTerminal: false,
+      printQRInTerminal: false, // Disables QR Code Terminal Output
       logger: pino({ level: "silent" }),
-      browser: ["NexosBot", "Opera GX", "120.0.5543.204"],
+      browser: ["Ubuntu", "Chrome", "20.0.04"], // Uses Standard Desktop Chrome to prevent linking errors
       generateHighQualityLinkPreview: true,
-      markOnlineOnConnect: config.bot?.online || true,
-      syncFullHistory: config.bot?.history || false,
-      shouldSyncHistoryMessage: config.bot?.history || false,
+      markOnlineOnConnect: config.bot?.online ?? true,
+      syncFullHistory: false,
+      shouldSyncHistoryMessage: false,
     });
+
+    // Request Pairing Code if device is not registered yet
+    if (!sock.authState.creds.registered) {
+      // Uses BOT_PHONE_NUMBER from Render env, or fallback to default
+      const targetNumber = process.env.BOT_PHONE_NUMBER || "918766540537"; 
+      const cleanNumber = targetNumber.replace(/[^0-9]/g, "");
+
+      setTimeout(async () => {
+        try {
+          let pairingCode = await sock.requestPairingCode(cleanNumber);
+          pairingCode = pairingCode?.match(/.{1,4}/g)?.join("-") || pairingCode;
+          console.log("\n==================================================");
+          console.log(`  YOUR PAIRING CODE FOR WHATSAPP: ${pairingCode}`);
+          console.log("==================================================\n");
+        } catch (err) {
+          logger.error("Failed to generate pairing code", { error: err.message });
+        }
+      }, 5000);
+    }
 
     // Save login credentials on update
     sock.ev.on("creds.update", saveCreds);

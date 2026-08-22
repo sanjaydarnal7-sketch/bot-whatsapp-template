@@ -1,6 +1,6 @@
 /**
  * WhatsApp Bot Entry Point
- * Craftsmen & Co. - Baileys Bot with Express Web Server & Pairing Code Support
+ * Craftsmen & Co. - Auto-Clean Session & Pairing Code Support
  */
 const express = require("express");
 const {
@@ -18,23 +18,17 @@ const app = express();
 const PORT = process.env.PORT || 10000;
 
 app.get("/", (req, res) => {
-  res.send("Craftsmen & Co. WhatsApp Bot is Active 24/7!");
+  res.send("Craftsmen & Co. WhatsApp Bot Active");
 });
 
 app.listen(PORT, () => {
-  console.log(`Web server listening and bound to port ${PORT}`);
+  console.log(`Port bound successfully to ${PORT}`);
 });
 
-// Logging via pino
-const baseLogger = pino({
-  level: config.logging?.level || "info",
-  transport: config.logging?.logToFile ? { target: "pino-pretty" } : undefined,
-});
+// Logging
+const baseLogger = pino({ level: "info" });
 const logger = createLogger(baseLogger);
 
-/**
- * Loads all command modules from the commands directory.
- */
 const commands = new Map();
 if (fs.existsSync("./commands")) {
   fs.readdirSync("./commands").forEach((file) => {
@@ -43,9 +37,6 @@ if (fs.existsSync("./commands")) {
   });
 }
 
-/**
- * Loads all event handler modules from the events directory.
- */
 const eventFiles = fs.existsSync("./events")
   ? fs.readdirSync("./events").filter((f) => f.endsWith(".js"))
   : [];
@@ -57,20 +48,12 @@ for (const file of eventFiles) {
   }
 }
 
-/**
- * Starts the WhatsApp bot and registers event handlers.
- */
 async function startBot() {
   try {
-    const { state, saveCreds } = await withRetry(
-      () => useMultiFileAuthState("auth_info"),
-      { retries: 3, delayMs: 1000 }
-    );
-    const { version, isLatest } = await withRetry(
-      () => fetchLatestBaileysVersion(),
-      { retries: 3, delayMs: 1000 }
-    );
-    logger.info("Starting WhatsApp bot", { version: version.join("."), isLatest });
+    const authPath = path.join(__dirname, "auth_info");
+
+    const { state, saveCreds } = await useMultiFileAuthState(authPath);
+    const { version } = await fetchLatestBaileysVersion();
 
     const sock = makeWASocket({
       version,
@@ -79,14 +62,29 @@ async function startBot() {
       logger: pino({ level: "silent" }),
       browser: ["Ubuntu", "Chrome", "20.0.04"],
       generateHighQualityLinkPreview: true,
-      markOnlineOnConnect: config.bot?.online ?? true,
+      markOnlineOnConnect: true,
       syncFullHistory: false,
       shouldSyncHistoryMessage: false,
     });
 
-    // Request Pairing Code if device is not registered yet
+    // Handle logout error code 401 automatically by clearing folder
+    sock.ev.on("connection.update", async (update) => {
+      const { connection, lastDisconnect } = update;
+      if (connection === "close") {
+        const statusCode = lastDisconnect?.error?.output?.statusCode;
+        if (statusCode === 401) {
+          console.log("Logged out by WhatsApp! Auto-clearing session...");
+          if (fs.existsSync(authPath)) {
+            fs.rmSync(authPath, { recursive: true, force: true });
+          }
+          startBot();
+          return;
+        }
+      }
+    });
+
     if (!sock.authState.creds.registered) {
-      const targetNumber = process.env.BOT_PHONE_NUMBER || "918766540537"; 
+      const targetNumber = process.env.BOT_PHONE_NUMBER || "918766540537";
       const cleanNumber = targetNumber.replace(/[^0-9]/g, "");
 
       setTimeout(async () => {
@@ -94,18 +92,16 @@ async function startBot() {
           let pairingCode = await sock.requestPairingCode(cleanNumber);
           pairingCode = pairingCode?.match(/.{1,4}/g)?.join("-") || pairingCode;
           console.log("\n==================================================");
-          console.log(`  YOUR PAIRING CODE FOR WHATSAPP: ${pairingCode}`);
+          console.log(`  YOUR FRESH PAIRING CODE: ${pairingCode}`);
           console.log("==================================================\n");
         } catch (err) {
-          logger.error("Failed to generate pairing code", { error: err.message });
+          logger.error("Error generating pairing code", { error: err.message });
         }
       }, 5000);
     }
 
-    // Save login credentials on update
     sock.ev.on("creds.update", saveCreds);
 
-    // Register all event handlers
     for (const { eventName, handler } of eventHandlers) {
       if (eventName === "connection.update") {
         sock.ev.on(eventName, handler(sock, logger, saveCreds, startBot));
@@ -116,7 +112,7 @@ async function startBot() {
       }
     }
   } catch (error) {
-    logger.error("Failed to start bot", { error: error.message, stack: error.stack });
+    logger.error("Failed to start bot", { error: error.message });
     setTimeout(startBot, 5000);
   }
 }

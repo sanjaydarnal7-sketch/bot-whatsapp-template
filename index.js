@@ -1,7 +1,8 @@
 /**
  * WhatsApp Bot Entry Point
- * Craftsmen & Co. - Baileys Bot with Pairing Code Support
+ * Craftsmen & Co. - Baileys Bot with Express Web Server & Pairing Code Support
  */
+const express = require("express");
 const {
   default: makeWASocket,
   useMultiFileAuthState,
@@ -11,6 +12,18 @@ const fs = require("fs");
 const path = require("path");
 const pino = require("pino");
 const { createLogger, withRetry, ...config } = require("./utils");
+
+// Web Server for Render Port Binding
+const app = express();
+const PORT = process.env.PORT || 10000;
+
+app.get("/", (req, res) => {
+  res.send("Craftsmen & Co. WhatsApp Bot is Active 24/7!");
+});
+
+app.listen(PORT, () => {
+  console.log(`Web server listening and bound to port ${PORT}`);
+});
 
 // Logging via pino
 const baseLogger = pino({
@@ -62,9 +75,9 @@ async function startBot() {
     const sock = makeWASocket({
       version,
       auth: state,
-      printQRInTerminal: false, // Disables QR Code Terminal Output
+      printQRInTerminal: false,
       logger: pino({ level: "silent" }),
-      browser: ["Ubuntu", "Chrome", "20.0.04"], // Uses Standard Desktop Chrome to prevent linking errors
+      browser: ["Ubuntu", "Chrome", "20.0.04"],
       generateHighQualityLinkPreview: true,
       markOnlineOnConnect: config.bot?.online ?? true,
       syncFullHistory: false,
@@ -73,7 +86,6 @@ async function startBot() {
 
     // Request Pairing Code if device is not registered yet
     if (!sock.authState.creds.registered) {
-      // Uses BOT_PHONE_NUMBER from Render env, or fallback to default
       const targetNumber = process.env.BOT_PHONE_NUMBER || "918766540537"; 
       const cleanNumber = targetNumber.replace(/[^0-9]/g, "");
 

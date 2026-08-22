@@ -10,7 +10,20 @@ const {
 const fs = require("fs");
 const path = require("path");
 const pino = require("pino");
+const express = require("express"); // Added for Render port binding
 const { createLogger, withRetry, ...config } = require("./utils");
+
+// Render Port Binding Server
+const app = express();
+const PORT = process.env.PORT || 10000;
+
+app.get("/", (req, res) => {
+  res.send("WhatsApp Community AI Bot is running live!");
+});
+
+app.listen(PORT, () => {
+  console.log(`Server listening on port ${PORT}`);
+});
 
 // Logging via pino
 const baseLogger = pino({
@@ -24,16 +37,20 @@ const logger = createLogger(baseLogger);
  * @returns {Map}
  */
 const commands = new Map();
-fs.readdirSync("./commands").forEach((file) => {
-  const cmd = require(`./commands/${file}`);
-  commands.set(cmd.name, cmd);
-});
+if (fs.existsSync("./commands")) {
+  fs.readdirSync("./commands").forEach((file) => {
+    const cmd = require(`./commands/${file}`);
+    commands.set(cmd.name, cmd);
+  });
+}
 
 /**
  * Loads all event handler modules from the events directory.
  * @returns {Array}
  */
-const eventFiles = fs.readdirSync("./events").filter((f) => f.endsWith(".js"));
+const eventFiles = fs.existsSync("./events")
+  ? fs.readdirSync("./events").filter((f) => f.endsWith(".js"))
+  : [];
 const eventHandlers = [];
 for (const file of eventFiles) {
   const eventModule = require(`./events/${file}`);
@@ -47,8 +64,14 @@ for (const file of eventFiles) {
  */
 async function startBot() {
   try {
-    const { state, saveCreds } = await withRetry(() => useMultiFileAuthState("auth_info"), { retries: 3, delayMs: 1000 });
-    const { version, isLatest } = await withRetry(() => fetchLatestBaileysVersion(), { retries: 3, delayMs: 1000 });
+    const { state, saveCreds } = await withRetry(
+      () => useMultiFileAuthState("auth_info"),
+      { retries: 3, delayMs: 1000 }
+    );
+    const { version, isLatest } = await withRetry(
+      () => fetchLatestBaileysVersion(),
+      { retries: 3, delayMs: 1000 }
+    );
     logger.info("Starting WhatsApp bot", { version: version.join("."), isLatest });
 
     const sock = makeWASocket({
@@ -63,23 +86,41 @@ async function startBot() {
       shouldSyncHistoryMessage: config.bot?.history || false,
     });
 
-  // Save login credentials on update
+    // Save login credentials on update
     sock.ev.on("creds.update", saveCreds);
 
-  // Register all event handlers
+    // Filter to ensure bot only responds in Community Groups
+    sock.ev.on("messages.upsert", async (m) => {
+      if (m.type === "notify") {
+        for (const msg of m.messages) {
+          // Ignore own messages or status updates
+          if (msg.key.fromMe || msg.key.remoteJid === "status@broadcast") continue;
+
+          // Check if message is from a group (community / group JID ends with @g.us)
+          const isGroup = msg.key.remoteJid.endsWith("@g.us");
+          if (!isGroup) {
+            // Personal DMs ko ignore kar dega
+            continue;
+          }
+        }
+      }
+    });
+
+    // Register all event handlers
     for (const { eventName, handler } of eventHandlers) {
-    // Pass only the dependencies that the handler expects
       if (eventName === "connection.update") {
         sock.ev.on(eventName, handler(sock, logger, saveCreds, startBot));
       } else if (eventName === "messages.upsert") {
         sock.ev.on(eventName, handler(sock, logger, commands));
       } else {
-      // For future extensibility, just pass sock and logger
         sock.ev.on(eventName, handler(sock, logger));
       }
     }
   } catch (error) {
-    logger.error("Failed to start bot", { error: error.message, stack: error.stack });
+    logger.error("Failed to start bot", {
+      error: error.message,
+      stack: error.stack,
+    });
     setTimeout(startBot, 5000);
   }
 }

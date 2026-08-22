@@ -1,4 +1,4 @@
-// Craftsmen & Co. System Knowledge Base & Persona
+// CRAFTSMEN & CO. SYSTEM PROMPT
 const SYSTEM_PROMPT = `
 CRAFTSMEN & CO. — WHATSAPP HOSPITALITY NETWORK AI BOT
 
@@ -72,7 +72,6 @@ module.exports = {
         const apiKey = process.env.GROQ_API_KEY || process.env.GEMINI_API_KEY;
         if (!apiKey) continue;
 
-        // Direct REST Call to Groq AI
         const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
           method: "POST",
           headers: {
